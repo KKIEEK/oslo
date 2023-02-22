@@ -1,3 +1,4 @@
+import copy
 from functools import partial
 from typing import Iterable, Optional, OrderedDict, Set
 
@@ -36,14 +37,13 @@ def _cast_float(args, dtype: torch.dtype):
 class _DistributedDataParallel(OsloParallelWrapper):
     """Distributed data parallel for ColoTensor. Nested _DistributedDataParallel is not supported now.
     Example:
-        >>> from colossalai.core import global_context as gpc
-        >>> from colossalai.context import ParallelMode
-        >>> model = torch.nn.Linear(20, 1)
-        >>> pg = ProcessGroup(tp_degree = world_size//2)
-        >>> model = _DistributedDataParallel(model, pg)
+        >>> from oslo.torch.distributed.parallel_context import ParallelContext
+        >>> module = torch.nn.Linear(20, 1)
+        >>> parallel_context = ParallelContext.from_torch(data_parallel_size=1)
+        >>> model = _DistributedDataParallel(module, parallel_context)
         >>> logits = model(x)
         >>> loss = criterion(logits, labels)
-        >>> model.backward(loss)
+        >>> loss.backward()
     Args:
         module (torch.nn.Module): Module to apply DDP.
         parallel_context (ParallelContext, optional): The process group which DDP uses.
@@ -57,12 +57,15 @@ class _DistributedDataParallel(OsloParallelWrapper):
         bucket_cap_mb: int = 25,
         rebuild_bucket: bool = True,
     ) -> None:
-        assert not isinstance(module, _DistributedDataParallel)
+        if isinstance(module, _DistributedDataParallel):
+            raise ValueError
+
         super(_DistributedDataParallel, self).__init__(parallelism_priority=100)
         self.module = module
+        self.forward = copy.copy(module.forward)
+
         self.comm_stream: torch.cuda.Stream = torch.cuda.Stream()
         assert parallel_context
-
         self.parallel_context = parallel_context
         self.dp_world_size = self.parallel_context.get_world_size(ParallelMode.DATA)
 
@@ -76,11 +79,11 @@ class _DistributedDataParallel(OsloParallelWrapper):
         self.register_full_backward_hook(self._backward_hook)
 
     def parallelize(self):
-        if hasattr(self.module, 'parallelize'):
+        if hasattr(self.module, "parallelize"):
             self.module.parallelize()
 
     def deparallelize(self):
-        if hasattr(self.module, 'deparallelize'):
+        if hasattr(self.module, "deparallelize"):
             self.module.deparallelize()
 
     def parameters(self, recurse: bool = True):
@@ -102,9 +105,6 @@ class _DistributedDataParallel(OsloParallelWrapper):
         remove_duplicate: bool = True,
     ):
         return self.module.named_modules(memo, prefix, remove_duplicate)
-
-    def forward(self, *args, **kwargs):
-        return self.module(*args, **kwargs)
 
     def _backward_hook(self, module, grad_input, grad_output):
         if not isinstance(module, _DistributedDataParallel):
