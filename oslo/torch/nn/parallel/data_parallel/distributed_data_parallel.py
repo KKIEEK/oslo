@@ -5,6 +5,7 @@ import torch
 import torch.distributed as dist
 from oslo.torch.distributed.parallel_context import ParallelContext
 from oslo.torch.distributed.parallel_mode import ParallelMode
+from oslo.torch.nn.parallel.utils import OsloParallelWrapper
 
 from .reducer import Reducer
 
@@ -32,7 +33,7 @@ def _cast_float(args, dtype: torch.dtype):
     return args
 
 
-class _DistributedDataParallel(torch.nn.Module):
+class _DistributedDataParallel(OsloParallelWrapper):
     """Distributed data parallel for ColoTensor. Nested _DistributedDataParallel is not supported now.
     Example:
         >>> from colossalai.core import global_context as gpc
@@ -57,7 +58,7 @@ class _DistributedDataParallel(torch.nn.Module):
         rebuild_bucket: bool = True,
     ) -> None:
         assert not isinstance(module, _DistributedDataParallel)
-        super().__init__()
+        super(_DistributedDataParallel, self).__init__(parallelism_priority=100)
         self.module = module
         self.comm_stream: torch.cuda.Stream = torch.cuda.Stream()
         assert parallel_context
@@ -73,6 +74,14 @@ class _DistributedDataParallel(torch.nn.Module):
             if p.requires_grad:
                 p.register_hook(partial(self.grad_handle, p))
         self.register_full_backward_hook(self._backward_hook)
+
+    def parallelize(self):
+        if hasattr(self.module, 'parallelize'):
+            self.module.parallelize()
+
+    def deparallelize(self):
+        if hasattr(self.module, 'deparallelize'):
+            self.module.deparallelize()
 
     def parameters(self, recurse: bool = True):
         return self.module.parameters(recurse)
@@ -95,7 +104,6 @@ class _DistributedDataParallel(torch.nn.Module):
         return self.module.named_modules(memo, prefix, remove_duplicate)
 
     def forward(self, *args, **kwargs):
-        self.module.zero_grad(set_to_none=True)
         return self.module(*args, **kwargs)
 
     def _backward_hook(self, module, grad_input, grad_output):
