@@ -1,16 +1,9 @@
-from typing import List, Optional, Callable
+from typing import List, Optional
+from oslo.torch.distributed.parallel_context import ParallelContext
+from oslo.torch.distributed.parallel_mode import ParallelMode
+from oslo.torch.nn.parallel.utils import add_wrapper
 
-from oslo.torch.nn.parallel.data_parallel.distributed_data_parallel import (
-    DistributedDataParallel,
-)
-# from oslo.torch.nn.parallel.data_parallel._fsdp.fully_sharded_data_parallel import (
-#     FullyShardedDataParallel,
-#     MixedPrecision,
-#     CPUOffload,
-#     ShardingStrategy,
-# )
-from torch.distributed.optim import ZeroRedundancyOptimizer
-from oslo import ParallelContext
+from .distributed_data_parallel import _DistributedDataParallel
 
 
 def DataParallel(
@@ -18,9 +11,9 @@ def DataParallel(
     optimizer,
     parallel_context: ParallelContext,
     zero_stage: int = 0,
-    transformer_wrap_layers: Optional[List] = None,
-    mixed_precision: Optional[MixedPrecision] = None,
-    cpu_offload: bool = False,
+    # transformer_wrap_layers: Optional[List] = None,
+    # mixed_precision: Optional[MixedPrecision] = None,
+    # cpu_offload: bool = False,
 ):
     if zero_stage == 0:
         return (
@@ -77,3 +70,19 @@ def DataParallel(
     #     return module, optimizer
     else:
         raise ValueError("param `zero_stage` must be one of the 0, 1, 2, 3.")
+
+
+def DistributedDataParallel(
+    module, parallel_context, bucket_cap_mb=25, rebuild_bucket=True
+):
+    ddp = _DistributedDataParallel(
+        module,
+        parallel_context,
+        bucket_cap_mb=bucket_cap_mb,
+        rebuild_bucket=rebuild_bucket,
+    )
+    add_wrapper(
+        module, mode=ParallelMode.DATA, wrapper=ddp, parallel_context=parallel_context
+    )
+    setattr(module, "forward", ddp.forward)
+    return module
