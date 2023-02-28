@@ -89,7 +89,6 @@ class _DistributedDataParallel(OsloParallelWrapper):
                 continue
             if p.requires_grad:
                 p.register_hook(partial(self.grad_handle, p))
-        # self.register_full_backward_hook(self._backward_hook)
 
     def parallelize(self):
         if hasattr(self.module, "parallelize"):
@@ -137,7 +136,6 @@ class _DistributedDataParallel(OsloParallelWrapper):
                 p.grad = p._saved_grad
 
     def grad_handle(self, p, grad):
-        print("grad_handle")
         if grad.device.type != "cpu":
             empty_grad = torch.empty_like(grad)
             free_storage(empty_grad)
