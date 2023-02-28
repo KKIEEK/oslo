@@ -37,8 +37,10 @@ def _cast_float(args, dtype: torch.dtype):
 class BwdFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, module, *args):
-        ctx.mark_dirty(*args)
+        if not isinstance(module, _DistributedDataParallel):
+            raise ValueError
         ctx.module = module
+        ctx.mark_dirty(*args)
         return args
 
     @staticmethod
