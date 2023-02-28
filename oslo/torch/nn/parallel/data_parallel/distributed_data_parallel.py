@@ -34,6 +34,19 @@ def _cast_float(args, dtype: torch.dtype):
     return args
 
 
+class BwdFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, module, *args):
+        ctx.mark_dirty(*args)
+        ctx.module = module
+        return args
+
+    @staticmethod
+    def backward(ctx, *grad_outputs):
+        ctx.module._backward()
+        return (None,) + grad_outputs
+
+
 class _DistributedDataParallel(OsloParallelWrapper):
     """Distributed data parallel for ColoTensor. Nested _DistributedDataParallel is not supported now.
     Example:
@@ -62,7 +75,7 @@ class _DistributedDataParallel(OsloParallelWrapper):
 
         super(_DistributedDataParallel, self).__init__(parallelism_priority=100)
         self.module = module
-        self.forward = copy.copy(module.forward)
+        self._forward = copy.copy(module.forward)
 
         self.comm_stream: torch.cuda.Stream = torch.cuda.Stream()
         assert parallel_context
@@ -76,7 +89,7 @@ class _DistributedDataParallel(OsloParallelWrapper):
                 continue
             if p.requires_grad:
                 p.register_hook(partial(self.grad_handle, p))
-        self.register_full_backward_hook(self._backward_hook)
+        # self.register_full_backward_hook(self._backward_hook)
 
     def parallelize(self):
         if hasattr(self.module, "parallelize"):
@@ -106,10 +119,12 @@ class _DistributedDataParallel(OsloParallelWrapper):
     ):
         return self.module.named_modules(memo, prefix, remove_duplicate)
 
-    def _backward_hook(self, module, grad_input, grad_output):
-        if not isinstance(module, _DistributedDataParallel):
-            raise ValueError
+    def forward(self, *args, **kwargs):
+        args = (arg.requires_grad_().clone() for arg in args)
+        args = BwdFunction.apply(self, *args)
+        return self._forward(*args, **kwargs)
 
+    def _backward(self):
         with torch.cuda.stream(self.comm_stream):
             self.reducer.flush()
         torch.cuda.current_stream().wait_stream(self.comm_stream)
@@ -122,6 +137,7 @@ class _DistributedDataParallel(OsloParallelWrapper):
                 p.grad = p._saved_grad
 
     def grad_handle(self, p, grad):
+        print("grad_handle")
         if grad.device.type != "cpu":
             empty_grad = torch.empty_like(grad)
             free_storage(empty_grad)
