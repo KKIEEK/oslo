@@ -40,7 +40,7 @@ class BackwardFunction(torch.autograd.Function):
 
 
 class _DistributedDataParallel(OsloParallelWrapper):
-    """Distributed data parallel for ColoTensor. Nested _DistributedDataParallel is not supported now.
+    """Distributed data parallel for OSLO.
     Example:
         >>> from oslo.torch.distributed.parallel_context import ParallelContext
         >>> module = torch.nn.Linear(20, 1)
@@ -67,7 +67,8 @@ class _DistributedDataParallel(OsloParallelWrapper):
 
         super(_DistributedDataParallel, self).__init__(parallelism_priority=100)
         self.module = module
-        self._forward = copy.copy(module.forward)
+        self.module.zero_grad = self.zero_grad
+        self._forward = copy.copy(self.module.forward)
 
         self.comm_stream: torch.cuda.Stream = torch.cuda.Stream()
         assert parallel_context
@@ -90,26 +91,6 @@ class _DistributedDataParallel(OsloParallelWrapper):
         if hasattr(self.module, "deparallelize"):
             self.module.deparallelize()
 
-    def parameters(self, recurse: bool = True):
-        return self.module.parameters(recurse)
-
-    def named_parameters(self, prefix: str = "", recurse: bool = True):
-        return self.module.named_parameters(prefix, recurse)
-
-    def named_buffers(self, prefix: str = "", recurse: bool = True):
-        return self.module.named_buffers(prefix, recurse)
-
-    def named_children(self):
-        return self.module.named_children()
-
-    def named_modules(
-        self,
-        memo: Optional[Set[torch.nn.Module]] = None,
-        prefix: str = "",
-        remove_duplicate: bool = True,
-    ):
-        return self.module.named_modules(memo, prefix, remove_duplicate)
-
     def forward(self, *args, **kwargs):
         args = (arg.requires_grad_().clone() for arg in args)
         args = BackwardFunction.apply(self, *args)
@@ -130,7 +111,7 @@ class _DistributedDataParallel(OsloParallelWrapper):
     def grad_handle(self, p, grad):
         if grad.device.type != "cpu":
             empty_grad = torch.empty_like(grad)
-            # free_storage(empty_grad)
+            free_storage(empty_grad)
             if self.dp_world_size > 1:
                 grad = grad / self.dp_world_size
                 self.comm_stream.wait_stream(torch.cuda.current_stream())
@@ -160,8 +141,8 @@ class _DistributedDataParallel(OsloParallelWrapper):
             p._saved_grad = grad
 
     def zero_grad(self, set_to_none: bool = False) -> None:
-        self.module.zero_grad(set_to_none=True)
-        for p in self.module.parameters():
+        super().zero_grad(set_to_none=True)
+        for p in self.parameters():
             if getattr(p, "_saved_grad", None) is not None:
                 if set_to_none:
                     p._saved_grad = None
@@ -188,13 +169,3 @@ class _DistributedDataParallel(OsloParallelWrapper):
         """
         for p in params_to_ignore:
             p._ddp_to_ignore = True
-
-    def state_dict(self, destination=None, prefix="", keep_vars=False):
-        return self.module.state_dict(
-            destination=destination, prefix=prefix, keep_vars=keep_vars
-        )
-
-    def load_state_dict(
-        self, state_dict: OrderedDict[str, torch.Tensor], strict: bool = True
-    ):
-        return self.module.load_state_dict(state_dict, strict)
