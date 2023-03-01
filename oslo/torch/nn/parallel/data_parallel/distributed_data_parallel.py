@@ -24,17 +24,7 @@ def free_storage(data: torch.Tensor) -> None:
         data.storage().resize_(0)
 
 
-def _cast_float(args, dtype: torch.dtype):
-    if isinstance(args, torch.Tensor) and torch.is_floating_point(args):
-        args = args.to(dtype)
-    elif isinstance(args, (list, tuple)):
-        args = type(args)(_cast_float(t, dtype) for t in args)
-    elif isinstance(args, dict):
-        args = {k: _cast_float(v, dtype) for k, v in args.items()}
-    return args
-
-
-class BwdFunction(torch.autograd.Function):
+class BackwardFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, module, *args):
         if not isinstance(module, _DistributedDataParallel):
@@ -122,7 +112,7 @@ class _DistributedDataParallel(OsloParallelWrapper):
 
     def forward(self, *args, **kwargs):
         args = (arg.requires_grad_().clone() for arg in args)
-        args = BwdFunction.apply(self, *args)
+        args = BackwardFunction.apply(self, *args)
         return self._forward(*args, **kwargs)
 
     def _backward(self):
@@ -140,7 +130,7 @@ class _DistributedDataParallel(OsloParallelWrapper):
     def grad_handle(self, p, grad):
         if grad.device.type != "cpu":
             empty_grad = torch.empty_like(grad)
-            free_storage(empty_grad)
+            # free_storage(empty_grad)
             if self.dp_world_size > 1:
                 grad = grad / self.dp_world_size
                 self.comm_stream.wait_stream(torch.cuda.current_stream())
